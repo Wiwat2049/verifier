@@ -1,0 +1,106 @@
+cat > .github/workflows/send-ton.yml << 'EOF'
+name: Send TON Transaction
+
+on:
+  workflow_dispatch:
+    inputs:
+      recipient_address:
+        description: 'Recipient TON address'
+        required: true
+        type: string
+      amount:
+        description: 'Amount to send (in TON)'
+        required: true
+        type: string
+      comment:
+        description: 'Transaction comment (optional)'
+        required: false
+        type: string
+        default: ''
+
+jobs:
+  send-ton:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: |
+          npm install -g @ton/ton @ton/crypto @ton/core
+
+      - name: Create send script
+        run: |
+          cat > send-ton.js << 'EOD'
+          const { TonClient, WalletContractV4, internal } = require("@ton/ton");
+          const { mnemonicToPrivateKey } = require("@ton/crypto");
+
+          async function sendTON() {
+            try {
+              const client = new TonClient({
+                endpoint: 'https://toncenter.com/api/v2/jsonRPC',
+                apiKey: process.env.TON_API_KEY
+              });
+
+              const mnemonic = process.env.TON_WALLET_MNEMONIC.split(',');
+              const key = await mnemonicToPrivateKey(mnemonic);
+              
+              const wallet = WalletContractV4.create({
+                publicKey: key.publicKey,
+                workchain: 0
+              });
+
+              const contract = client.open(wallet);
+              
+              const recipientAddress = process.env.RECIPIENT_ADDRESS;
+              const amount = process.env.AMOUNT;
+              const comment = process.env.COMMENT || '';
+
+              console.log(`Sending ${amount} TON to ${recipientAddress}`);
+              
+              const seqno = await contract.getSeqno();
+              
+              await contract.sendTransfer({
+                secretKey: key.secretKey,
+                seqno: seqno,
+                messages: [
+                  internal({
+                    to: recipientAddress,
+                    value: amount,
+                    body: comment,
+                    bounce: false,
+                  })
+                ]
+              });
+
+              console.log('Transaction sent successfully!');
+              
+            } catch (error) {
+              console.error('Error sending TON:', error);
+              process.exit(1);
+            }
+          }
+
+          sendTON();
+          EOD
+
+      - name: Send TON
+        env:
+          TON_WALLET_MNEMONIC: ${{ secrets.TON_WALLET_MNEMONIC }}
+          TON_API_KEY: ${{ secrets.TON_API_KEY }}
+          RECIPIENT_ADDRESS: ${{ inputs.recipient_address }}
+          AMOUNT: ${{ inputs.amount }}
+          COMMENT: ${{ inputs.comment }}
+        run: node send-ton.js
+
+      - name: Notify completion
+        if: success()
+        run: |
+          echo "✅ Successfully sent ${{ inputs.amount }} TON to ${{ inputs.recipient_address }}"
+EOF
